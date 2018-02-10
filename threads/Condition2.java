@@ -51,6 +51,7 @@ public class Condition2 {
 	 */
 	public void wakeAll() {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
+		// Just Call wake for multiple threads
 	}
 
 	private Lock conditionLock;
