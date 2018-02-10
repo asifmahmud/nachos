@@ -291,12 +291,8 @@ public class KThread {
 	        return;
 	    }
 	    else {
-	        // We give joinerQueue the lock of this in order to transfer the priority of this thread
 	        joinQueue.acquire(this);
-	        // we are adding the currentThread to the joinerQueue
 	        joinQueue.waitForAccess(currentThread);
-	        // We sleep the currentThread because we need to wait until this thread finishes
-	        // When this thread finishes we will wake up in the finish() method
 	        currentThread.sleep();
 	    }
 	    Machine.interrupt().enable();
@@ -311,13 +307,6 @@ public class KThread {
 
 		Machine.interrupt().restore(jStatus);
 		return;
-		*/
-		/*
-		KThread T1
-		T1.join()
-		'this' is T1
-		
-		don't use while loop
 		*/
 
 	}
