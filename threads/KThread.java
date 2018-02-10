@@ -202,6 +202,14 @@ public class KThread {
 
 		Lib.assertTrue(toBeDestroyed == null);
 		toBeDestroyed = currentThread;
+		
+		if (currentThread.joinQueue != null){
+			KThread toWake = currentThread.joinQueue.nextThread();
+			while( toWake != null){
+				toWake.ready();
+				toWake = currentThread.joinQueue.nextThread();
+			}
+		}
 
 		currentThread.status = statusFinished;
 
