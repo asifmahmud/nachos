@@ -449,47 +449,47 @@ public class KThread {
 	 */
 	public static void selfTest() {
 		Lib.debug(dbgThread, "Enter KThread.selfTest");
-
-		Runnable joinTest = new Runnable(){
-			public void run(){
-				System.out.println("In joinTest");
-		        int i = 0;
-		        while(i < 10) { 
-		            System.out.println("*** in while1 loop " + i + " ***");
-		            i++;
-		        } /*yield();*/ 
-			}
-		};
+		System.out.println("KThread Test");
 		
-		KThread t1 = new KThread(joinTest);
-		t1.setName("thread t1");
-
-	    Runnable joinTest2 = new Runnable() {
-		    public void run() { 
-		        System.out.println("In joinTest2");
-		        t1.join();
-		        int i = 0;
-		        while(i < 10) { 
-		            System.out.println("*** in while2 loop " + i + " ***");
-		            i++;
-		        } /*yield();*/ 
-		    }
-		};
-
-	    KThread t2 = new KThread(joinTest2);
-	    t2.setName("thread t2");
-
-	    System.out.println("=== Forking t2 ===");
-	    t2.fork();
-
-	    System.out.println("=== Forking t1 ===");
-	    t1.fork();
+//		Runnable joinTest = new Runnable(){
+//			public void run(){
+//				System.out.println("In joinTest");
+//		        int i = 0;
+//		        while(i < 10) { 
+//		            System.out.println("*** in while1 loop " + i + " ***");
+//		            i++;
+//		        } /*yield();*/ 
+//			}
+//		};
+//		
+//		KThread t1 = new KThread(joinTest);
+//		t1.setName("thread t1");
+//
+//	    Runnable joinTest2 = new Runnable() {
+//		    public void run() { 
+//		        System.out.println("In joinTest2");
+//		        t1.join();
+//		        int i = 0;
+//		        while(i < 10) { 
+//		            System.out.println("*** in while2 loop " + i + " ***");
+//		            i++;
+//		        } /*yield();*/ 
+//		    }
+//		};
+//
+//	    KThread t2 = new KThread(joinTest2);
+//	    t2.setName("thread t2");
+//
+//	    System.out.println("=== Forking t2 ===");
+//	    t2.fork();
+//
+//	    System.out.println("=== Forking t1 ===");
+//	    t1.fork();
 
 
 		//new KThread(new PingTest(2)).setName("forked thread").fork();
 		//new KThread(new PingTest(1)).setName("forked thread").fork();
 		//new PingTest(0).run();
-	    yield();
 	}
 
 	private static final char dbgThread = 't';
