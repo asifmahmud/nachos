@@ -127,9 +127,6 @@ public class PriorityScheduler extends Scheduler {
 	 */
 	protected class PriorityQueue extends ThreadQueue {
 		
-		private LinkedList<ThreadState> wQueue = new LinkedList<ThreadState>();
-		private ThreadState threadOwner;
-		
 		PriorityQueue(boolean transferPriority) {
 			this.transferPriority = transferPriority;
 		}
@@ -165,6 +162,31 @@ public class PriorityScheduler extends Scheduler {
 			
 		}
 		
+		public void setNeedToUpdate() {
+			if(!this.transferPriority)
+				return;
+			this.needToUpdate = true;
+			if (this.threadOwner != null)
+				threadOwner.setNeedToUpdate();
+		}
+		
+		public int getEffectivePqPriority() {
+			if (this.transferPriority == false)
+				return priorityMinimum;
+			
+			if (this.needToUpdate) {
+
+				this.effectivePriority = priorityMinimum;
+
+				for (ThreadState t : wQueue){
+					this.effectivePriority = Math.max(this.effectivePriority, t.getEffectivePriority());
+				}
+
+				this.needToUpdate = false;
+			}
+
+			return this.effectivePriority;
+		}
 
 		/**
 		 * Return the next thread that <tt>nextThread()</tt> would return,
@@ -176,9 +198,13 @@ public class PriorityScheduler extends Scheduler {
 			// implement me
 			ThreadState nextThread = null;
 			int priority = priorityMinimum;
+			
 			for (ThreadState t : this.wQueue) {
-				int tmpPriority = this.getEffectivePriority();
-				
+				int tmpPriority = this.getEffectivePqPriority();
+				if (priority < tmpPriority) {
+					priority = tmpPriority;
+					nextThread = t;
+				}
 			}
 			return nextThread;
 		}
@@ -193,6 +219,10 @@ public class PriorityScheduler extends Scheduler {
 		 * threads to the owning thread.
 		 */
 		public boolean transferPriority;
+		private LinkedList<ThreadState> wQueue = new LinkedList<ThreadState>();
+		private ThreadState threadOwner;
+		private boolean needToUpdate;
+		private int effectivePriority;
 	}
 
 	/**
@@ -212,7 +242,9 @@ public class PriorityScheduler extends Scheduler {
 		public ThreadState(KThread thread) {
 			this.thread = thread;
 			this.holdingQueues = new LinkedList<PriorityQueue>();
-
+			this.needToUpdate = false;
+			this.effectivePriority = priorityDefault;
+			this.waitingPQ = null;
 			setPriority(priorityDefault);
 		}
 
@@ -232,7 +264,20 @@ public class PriorityScheduler extends Scheduler {
 		 */
 		public int getEffectivePriority() {
 			// implement me
-			return priority;
+			if (this.needToUpdate) {
+				this.effectivePriority = this.priority;
+				for (PriorityQueue p : holdingQueues) {
+					this.effectivePriority = Math.max(this.effectivePriority, p.getEffectivePqPriority());	
+				}
+				this.needToUpdate = false;
+			}
+			return this.effectivePriority;
+		}
+		
+		public void setNeedToUpdate() {
+			this.needToUpdate = true;
+			if (waitingPQ != null)
+				waitingPQ.setNeedToUpdate();
 		}
 
 		/**
@@ -247,6 +292,8 @@ public class PriorityScheduler extends Scheduler {
 			this.priority = priority;
 
 			// implement me
+			setNeedToUpdate();
+
 		}
 
 		/**
@@ -263,6 +310,15 @@ public class PriorityScheduler extends Scheduler {
 		 */
 		public void waitForAccess(PriorityQueue waitQueue) {
 			// implement me
+			Lib.assertTrue(Machine.interrupt().disabled());
+			
+			if (holdingQueues.contains(waitQueue)) {
+				waitQueue.threadOwner = null;
+				holdingQueues.remove(waitQueue);
+			}
+			this.waitingPQ = waitQueue;
+			waitQueue.wQueue.add(this);
+			waitQueue.setNeedToUpdate();
 		}
 
 		/**
@@ -277,6 +333,13 @@ public class PriorityScheduler extends Scheduler {
 		 */
 		public void acquire(PriorityQueue waitQueue) {
 			// implement me
+			waitQueue.threadOwner = this;
+			this.holdingQueues.add(waitQueue);
+			if (this.waitingPQ == waitQueue)
+				this.waitingPQ = null;
+			
+			waitQueue.setNeedToUpdate();
+			setNeedToUpdate();
 		}
 
 		/** The thread with which this object is associated. */
@@ -284,6 +347,9 @@ public class PriorityScheduler extends Scheduler {
 
 		/** The priority of the associated thread. */
 		protected int priority;
+		protected int effectivePriority;
 		protected LinkedList<PriorityQueue> holdingQueues;
+		protected boolean needToUpdate;
+		protected PriorityQueue waitingPQ;
 	}
 }
