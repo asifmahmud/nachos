@@ -1,10 +1,7 @@
 package nachos.threads;
 
 import nachos.machine.*;
-
-import java.util.TreeSet;
-import java.util.HashSet;
-import java.util.Iterator;
+import java.util.LinkedList;
 
 /**
  * A scheduler that chooses threads based on their priorities.
@@ -129,6 +126,10 @@ public class PriorityScheduler extends Scheduler {
 	 * A <tt>ThreadQueue</tt> that sorts threads by priority.
 	 */
 	protected class PriorityQueue extends ThreadQueue {
+		
+		private LinkedList<ThreadState> wQueue = new LinkedList<ThreadState>();
+		private ThreadState threadOwner;
+		
 		PriorityQueue(boolean transferPriority) {
 			this.transferPriority = transferPriority;
 		}
@@ -146,8 +147,24 @@ public class PriorityScheduler extends Scheduler {
 		public KThread nextThread() {
 			Lib.assertTrue(Machine.interrupt().disabled());
 			// implement me
-			return null;
+			if (this.wQueue.isEmpty()) 
+				return null;
+			
+			if (this.threadOwner != null && this.transferPriority)
+				this.threadOwner.holdingQueues.remove(this);
+			
+			ThreadState nextThreadState = pickNextThread();
+			
+			if (nextThreadState != null) {
+				this.wQueue.remove(nextThreadState);
+				nextThreadState.acquire(this);
+				return nextThreadState.thread;
+			}
+			else
+				return null;
+			
 		}
+		
 
 		/**
 		 * Return the next thread that <tt>nextThread()</tt> would return,
@@ -157,7 +174,13 @@ public class PriorityScheduler extends Scheduler {
 		 */
 		protected ThreadState pickNextThread() {
 			// implement me
-			return null;
+			ThreadState nextThread = null;
+			int priority = priorityMinimum;
+			for (ThreadState t : this.wQueue) {
+				int tmpPriority = this.getEffectivePriority();
+				
+			}
+			return nextThread;
 		}
 
 		public void print() {
@@ -188,6 +211,7 @@ public class PriorityScheduler extends Scheduler {
 		 */
 		public ThreadState(KThread thread) {
 			this.thread = thread;
+			this.holdingQueues = new LinkedList<PriorityQueue>();
 
 			setPriority(priorityDefault);
 		}
@@ -260,5 +284,6 @@ public class PriorityScheduler extends Scheduler {
 
 		/** The priority of the associated thread. */
 		protected int priority;
+		protected LinkedList<PriorityQueue> holdingQueues;
 	}
 }
