@@ -3,7 +3,7 @@ package nachos.userprog;
 import nachos.machine.*;
 import nachos.threads.*;
 import nachos.userprog.*;
-
+import java.util.LinkedList;
 /**
  * A kernel that can support multiple user processes.
  */
@@ -11,6 +11,7 @@ public class UserKernel extends ThreadedKernel {
 	/**
 	 * Allocate a new user kernel.
 	 */
+	
 	public UserKernel() {
 		super();
 	}
@@ -23,12 +24,39 @@ public class UserKernel extends ThreadedKernel {
 		super.initialize(args);
 
 		console = new SynchConsole(Machine.console());
-
+		
 		Machine.processor().setExceptionHandler(new Runnable() {
 			public void run() {
 				exceptionHandler();
 			}
 		});
+		
+		pageLock = new Lock();
+		
+		int numPhysPage = Machine.processor().getNumPhysPages();
+		for (int i = 0; i < numPhysPage; i++) {
+			freePages.add(i);
+		}
+	}
+	
+	public static int getFreePage(UserProcess userProcess, int vpn) {
+		pageLock.acquire();
+		int pageNum = -1;
+		
+		if (!freePages.isEmpty()) {
+			pageNum = freePages.removeFirst();
+		}
+		pageLock.release();
+		return pageNum;
+	}
+
+	public static void addFreePage(int ppn) {
+		Lib.assertTrue((ppn >= 0) && (ppn < Machine.processor().getNumPhysPages()), "Index of inserted page out of bounds.");
+		pageLock.acquire();
+		Lib.assertTrue((freePages.size()+1 <= Machine.processor().getNumPhysPages()), "Adding more pages than available in physical memory.");
+		freePages.add(ppn);
+		pageLock.release();
+		
 	}
 
 	/**
@@ -96,9 +124,15 @@ public class UserKernel extends ThreadedKernel {
 		UserProcess process = UserProcess.newUserProcess();
 
 		String shellProgram = Machine.getShellProgramName();
-		Lib.assertTrue(process.execute(shellProgram, new String[] {}));
+		//Lib.assertTrue(process.execute(shellProgram, new String[] {}));
+		
+		boolean canLoad = process.execute(shellProgram, new String[] {});
+		if (canLoad)
+			KThread.currentThread().finish();
+		else {
+			Kernel.kernel.terminate();
+		}
 
-		KThread.currentThread().finish();
 	}
 
 	/**
@@ -110,7 +144,11 @@ public class UserKernel extends ThreadedKernel {
 
 	/** Globally accessible reference to the synchronized console. */
 	public static SynchConsole console;
+	
+	public static Lock pageLock;
+	public static LinkedList<Integer> freePages = new LinkedList<Integer>();
 
 	// dummy variables to make javac smarter
 	private static Coff dummy1 = null;
+
 }

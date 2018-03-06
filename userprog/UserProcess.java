@@ -22,11 +22,9 @@ public class UserProcess {
 	/**
 	 * Allocate a new process.
 	 */
+	
 	public UserProcess() {
-		int numPhysPages = Machine.processor().getNumPhysPages();
-		pageTable = new TranslationEntry[numPhysPages];
-		for (int i = 0; i < numPhysPages; i++)
-			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+		// Moved the pageTable initialization to the load() function.
 	}
 
 	/**
@@ -52,7 +50,8 @@ public class UserProcess {
 		if (!load(name, args))
 			return false;
 
-		new UThread(this).setName(name).fork();
+		this.thread = new UThread(this);
+		this.thread.setName(name).fork();
 
 		return true;
 	}
@@ -132,12 +131,37 @@ public class UserProcess {
 
 		byte[] memory = Machine.processor().getMemory();
 
-		// for now, just assume that virtual addresses equal physical addresses
-		if (vaddr < 0 || vaddr >= memory.length)
+		// Extract virtual page number from virtual address
+		int vpn = Processor.pageFromAddress(vaddr);
+		
+		// If the virtual page number is greater than the page table,
+		// no data can be transferred. Return 0.
+		if (vpn >= pageTable.length) return 0;
+
+		if (!pageTable[vpn].valid) {
+			// if virtual page number is not valid, get a new page assignment
+			int newFreePage = UserKernel.getFreePage(this, vpn);
+			// Set the physical page number in the page table to the newly acquired free page
+			pageTable[vpn].ppn = newFreePage;
+			// Set the valid bit to true
+			pageTable[vpn].valid = true;
+			if (!loadSections()) return 0;
+			
+		}
+		
+		int voff = Processor.offsetFromAddress(vaddr);
+		TranslationEntry t = pageTable[vpn];
+		t.used = true;
+		int ppn = t.ppn;
+		
+		int paddr = Processor.makeAddress(ppn, voff);
+
+		// Bounds check
+		if (paddr < 0 || paddr >= memory.length)
 			return 0;
 
-		int amount = Math.min(length, memory.length - vaddr);
-		System.arraycopy(memory, vaddr, data, offset, amount);
+		int amount = Math.min(length, memory.length - paddr);
+		System.arraycopy(memory, paddr, data, offset, amount);
 
 		return amount;
 	}
@@ -174,12 +198,42 @@ public class UserProcess {
 
 		byte[] memory = Machine.processor().getMemory();
 
+		// Extract virtual page number from virtual address
+		int vpn = Processor.pageFromAddress(vaddr);
+		
+		// If the virtual page number is greater than the page table,
+		// no data can be transferred. Return 0.
+		if (vpn >= pageTable.length) return 0;
+
+		if (!pageTable[vpn].valid) {
+			// if virtual page number is not valid, get a new page assignment
+			int newFreePage = UserKernel.getFreePage(this, vpn);
+			// Set the physical page number in the page table to the newly acquired free page
+			pageTable[vpn].ppn = newFreePage;
+			// Set the valid bit to true
+			pageTable[vpn].valid = true;
+			
+		}
+		
+		int voff = Processor.offsetFromAddress(vaddr);
+		TranslationEntry t = pageTable[vpn];
+		t.used = true;
+		
+		if (t.readOnly) return 0;
+		
+		int ppn = t.ppn;
+		
+		int paddr = Processor.makeAddress(ppn, voff);
+
 		// for now, just assume that virtual addresses equal physical addresses
-		if (vaddr < 0 || vaddr >= memory.length)
+		if (paddr < 0 || paddr >= memory.length)
 			return 0;
 
-		int amount = Math.min(length, memory.length - vaddr);
-		System.arraycopy(data, offset, memory, vaddr, amount);
+		int amount = Math.min(length, memory.length - paddr);
+		System.arraycopy(data, offset, memory, paddr, amount);
+		
+		// Set the dirty bit to True
+		t.dirty = true;
 
 		return amount;
 	}
@@ -247,6 +301,12 @@ public class UserProcess {
 
 		// and finally reserve 1 page for arguments
 		numPages++;
+		
+		this.pageTable = new TranslationEntry[numPages];
+		for (int i = 0; i < numPages; i++) {
+			int ppn = UserKernel.getFreePage(this, i);
+			pageTable[i] = new TranslationEntry(i, ppn, true, false, false, false);
+		}
 
 		if (!loadSections())
 			return false;
@@ -294,9 +354,14 @@ public class UserProcess {
 
 			for (int i = 0; i < section.getLength(); i++) {
 				int vpn = section.getFirstVPN() + i;
-
-				// for now, just assume virtual addresses=physical addresses
-				section.loadPage(i, vpn);
+				
+				if (vpn >= pageTable.length) return false;
+				int ppn = pageTable[vpn].ppn;
+				
+				if (!(i >= 0 && i < numPages)) return false;
+				if (!(ppn >= 0 && ppn < Machine.processor().getNumPhysPages() )) return false;
+				
+				section.loadPage(i, ppn);
 			}
 		}
 
@@ -307,6 +372,12 @@ public class UserProcess {
 	 * Release any resources allocated by <tt>loadSections()</tt>.
 	 */
 	protected void unloadSections() {
+		for (int i = 0; i < numPages; i++) {
+			TranslationEntry t = pageTable[i];
+			UserKernel.addFreePage(t.ppn);
+			t.valid = false;
+		}
+		coff.close();
 	}
 
 	/**
@@ -343,10 +414,17 @@ public class UserProcess {
 		return 0;
 	}
 
-	private static final int syscallHalt = 0, syscallExit = 1, syscallExec = 2,
-			syscallJoin = 3, syscallCreate = 4, syscallOpen = 5,
-			syscallRead = 6, syscallWrite = 7, syscallClose = 8,
-			syscallUnlink = 9;
+	private static final int 
+	syscallHalt = 0, 
+	syscallExit = 1, 
+	syscallExec = 2,
+	syscallJoin = 3, 
+	syscallCreate = 4, 
+	syscallOpen = 5,
+	syscallRead = 6, 
+	syscallWrite = 7, 
+	syscallClose = 8,
+	syscallUnlink = 9;
 
 	/**
 	 * Handle a syscall exception. Called by <tt>handleException()</tt>. The
@@ -410,17 +488,17 @@ public class UserProcess {
 	 * @return the value to be returned to the user.
 	 */
 	public int handleSyscall(int syscall, int a0, int a1, int a2, int a3) {
+		//System.out.println("System Call: " + Integer.toString(syscall));
 		switch (syscall) {
 		case syscallHalt:
 			return handleHalt();
-
+			
 		default:
 			Lib.debug(dbgProcess, "Unknown syscall " + syscall);
 			Lib.assertNotReached("Unknown system call!");
 		}
 		return 0;
 	}
-
 	/**
 	 * Handle a user exception. Called by <tt>UserKernel.exceptionHandler()</tt>
 	 * . The <i>cause</i> argument identifies which exception occurred; see the
@@ -448,7 +526,7 @@ public class UserProcess {
 			Lib.assertNotReached("Unexpected exception");
 		}
 	}
-
+	
 	/** The program being run by this process. */
 	protected Coff coff;
 
@@ -460,7 +538,9 @@ public class UserProcess {
 
 	/** The number of pages in the program's stack. */
 	protected final int stackPages = 8;
-
+	private String name;
+	private UThread thread;
+	
 	private int initialPC, initialSP;
 
 	private int argc, argv;
@@ -468,4 +548,6 @@ public class UserProcess {
 	private static final int pageSize = Processor.pageSize;
 
 	private static final char dbgProcess = 'a';
+	
+
 }
