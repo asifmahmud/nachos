@@ -3,7 +3,8 @@ package nachos.userprog;
 import nachos.machine.*;
 import nachos.threads.*;
 import nachos.userprog.*;
-
+import java.util.LinkedList;
+import java.util.Iterator;
 import java.io.EOFException;
 
 /**
@@ -25,6 +26,9 @@ public class UserProcess {
 	
 	public UserProcess() {
 		// Moved the pageTable initialization to the load() function.
+		
+		fileDescriptorTable[0] = UserKernel.console.openForReading(); // standard input
+		fileDescriptorTable[1] = UserKernel.console.openForWriting(); // standard output
 	}
 
 	/**
@@ -492,7 +496,25 @@ public class UserProcess {
 		switch (syscall) {
 		case syscallHalt:
 			return handleHalt();
-			
+		case syscallCreate:
+			return handleCreate(a0);
+		case syscallOpen:
+			return handleOpen(a0);
+		case syscallRead:
+            return handleRead(a0, a1, a2);
+        case syscallWrite:
+            return handleWrite(a0, a1, a2);	
+        case syscallClose:
+			return handleClose(a0);
+		case syscallUnlink:
+			return handleUnlink(a0);
+		case syscallExec:
+			return handleExec(a0, a1, a2);
+		case syscallExit:
+			return handleExit(a0);
+		case syscallJoin:
+			return handleJoin(a0, a1);
+
 		default:
 			Lib.debug(dbgProcess, "Unknown syscall " + syscall);
 			Lib.assertNotReached("Unknown system call!");
@@ -523,10 +545,274 @@ public class UserProcess {
 		default:
 			Lib.debug(dbgProcess, "Unexpected exception: "
 					+ Processor.exceptionNames[cause]);
+			handleExit(0);
 			Lib.assertNotReached("Unexpected exception");
 		}
 	}
 	
+	private int handleCreate(int vAddr) {
+		return fileOpen(vAddr, true);
+	}
+	
+	private int handleOpen(int vAddr) {
+		return fileOpen(vAddr, false);
+	}
+	
+	private int fileOpen(int vAddr, boolean create) {
+		
+		String filename = readVirtualMemoryString(vAddr, 256);
+		
+		if (filename == null) {
+			System.out.println("Could not parse file name.");
+			return -1;
+		}
+		
+		OpenFile file = ThreadedKernel.fileSystem.open(filename, create);
+		
+		if (file == null) {
+			System.out.println("File could not be opened for some reason.");
+			return -1;
+		}
+		
+		for (int i = 0; i < 16; i++) {
+			if (fileDescriptorTable[i] == null) {
+				
+				fileDescriptorTable[i] = file;
+
+				Iterator<OpenFileTableEntry> it = openFileTable.iterator();
+				boolean fileAlreadyOpen = false;
+				OpenFileTableEntry curEntry = null;
+				
+				while (it.hasNext()) {
+					curEntry = it.next();
+					if (curEntry.getFileName().equals(filename)) {
+						fileAlreadyOpen = true;
+						break;
+					}
+				}
+				
+				if (fileAlreadyOpen) {
+					curEntry.incrementOpenCount();
+				} 
+				else {
+					openFileTable.add(new OpenFileTableEntry(filename));
+				}
+				
+				return i;
+			}
+		}
+		file.close();
+		System.out.println("No file descriptors available.");
+		return -1;		
+	}
+	
+	private int handleRead(int fileDescriptor, int bufferVAddr, int count){
+
+		if (fileDescriptor < 0 || fileDescriptor > 15) {
+			//System.out.println("fileDescriptor is invalid");
+			return -1;
+		}
+
+		if (count < 0){
+			//System.out.println("Count bytes is negative");
+			return -1;
+		}
+
+		OpenFile file;
+
+		if (fileDescriptorTable[fileDescriptor] == null){
+			//System.out.println("File is not in the descriptor table");
+			return -1;
+		}else{
+			file = fileDescriptorTable[fileDescriptor];
+		}
+
+		byte[] data_transf = new byte[count];
+		int num_bytes_successfully_read = 0;
+		num_bytes_successfully_read = file.read(data_transf, 0, count);
+
+		if (num_bytes_successfully_read == -1) {
+			//System.out.println("No bytes were read because of a fatal error");
+			return -1;
+		}
+
+		int num_bytes_successfully_copied  = 0;
+		num_bytes_successfully_copied = writeVirtualMemory(bufferVAddr, data_transf, 0, num_bytes_successfully_read);
+
+		return num_bytes_successfully_copied;
+
+	}
+
+	private int handleWrite(int fileDescriptor, int bufferVAddr, int count) {
+
+		if (fileDescriptor < 0 || fileDescriptor > 15) {
+			//System.out.println("fileDescriptor is invalid");
+			return -1;
+		}
+
+		if (count < 0) {
+			//System.out.println("Count bytes is negative");
+			return -1;	
+		}
+
+		OpenFile file;
+
+		if (fileDescriptorTable[fileDescriptor] == null) {
+			//System.out.println("File is not in the descriptor table");
+			return -1;
+		}else{
+			file = fileDescriptorTable[fileDescriptor];
+		}
+
+		byte[] data_dest = new byte[count];
+		int num_bytes_successfully_copied = 0;
+		num_bytes_successfully_copied = readVirtualMemory(bufferVAddr, data_dest, 0, count);
+
+		int num_bytes_successfully_written = 0;
+		num_bytes_successfully_written = file.write(data_dest, 0, num_bytes_successfully_copied);
+
+		if (num_bytes_successfully_written == -1 || num_bytes_successfully_written < count) {
+			//System.out.println("No bytes were written because of a fatal error");
+			return -1;
+		}
+
+		return num_bytes_successfully_written;
+	}
+	
+	/** closes 1 out of the possible 16 files that are used by a processor **/
+	private int handleClose(int fileIndx) {
+		if(fileIndx >= 0 && fileIndx <= 15) {
+			OpenFile file = fileDescriptorTable[fileIndx];
+			
+			if(file != null) {
+				
+				Iterator<OpenFileTableEntry> it = openFileTable.iterator();
+				OpenFileTableEntry curEntry = null;
+				boolean fileFound = false;
+				
+				while (it.hasNext()) {
+					curEntry = it.next();
+					if (curEntry.getFileName().equals(file.getName())) {
+						curEntry.decrementOpenCount();
+						fileFound = true;
+						break;
+					}
+				}
+				
+				if (!fileFound) {
+					System.out.println("Could not find file in open file table.");
+					return -1;
+				}
+				
+				file.close();
+				fileDescriptorTable[fileIndx] = null;
+				return 0;
+			} 
+			else {
+				System.out.println("Invalid file descriptor.");
+				return -1;
+			}
+		} 
+		else {
+			System.out.println("File descriptor out of range.");
+			return -1;
+		}
+	}
+	/** deletes a file as long as no one is using it. If file is in use,
+	 *  then deletion is prolonged, and other users who wish to use the file after
+	 *  the call is made cannot use the file until after deletion.
+	 */
+	private int handleUnlink(int vAddr) {
+		String filename = readVirtualMemoryString(vAddr, 256);
+		
+		if (filename == null) {
+			System.out.println("Could not parse file name.");
+			return -1;
+		}
+
+		for(int i = 0; i < fileDescriptorTable.length; i++) {
+			if (fileDescriptorTable[i] != null) {
+				if (filename.equals(fileDescriptorTable[i].getName()))
+					handleClose(i);
+			}
+		}
+		
+		if (ThreadedKernel.fileSystem.remove(filename)) {
+			return 0;
+		}
+		else {
+			Iterator<OpenFileTableEntry> it = openFileTable.iterator();
+			OpenFileTableEntry curEntry = null;
+			boolean fileFound = false;
+			
+			while (it.hasNext()) {
+				curEntry = it.next();
+				if (curEntry.getFileName().equals(filename)) {
+					curEntry.markForDeletion();
+					fileFound = true;
+					break;
+				}
+			}
+			if(!fileFound) {
+				// kernel panic?
+			}
+			return -1;
+		}
+	}
+	
+	private int handleExit(int a0) {
+		// TODO
+		return 0;
+	}
+	
+	private int handleExec(int a0, int a1, int a2) {
+		// TODO
+		return 0;
+	}
+
+	private int handleJoin(int a0, int a1) {
+		// TODO
+		return 0;
+	}
+
+	
+	protected static class OpenFileTableEntry {
+		OpenFileTableEntry(String name) {
+			filename = name;
+			fileOpenCount++;
+		}
+		
+		public String getFileName() {
+			return filename;
+		}
+		
+		public void incrementOpenCount() {
+			fileOpenCount++;
+		}
+		
+		public void decrementOpenCount() {
+			fileOpenCount--;
+		}
+		
+		public void markForDeletion() {
+			markedForDeletion = true;
+		}
+		
+		private String filename;
+		private int fileOpenCount = 0;
+		private boolean markedForDeletion = false;
+	} // end OpenFileTableEntry class
+	
+	
+	
+	
+	
+	
+	// system wide open file table
+	protected static LinkedList<OpenFileTableEntry> openFileTable = new LinkedList<OpenFileTableEntry>();
+	
+	/** Array of open file objects */
+	protected OpenFile[] fileDescriptorTable = new OpenFile[16];
 	/** The program being run by this process. */
 	protected Coff coff;
 
