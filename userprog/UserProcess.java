@@ -23,14 +23,24 @@ public class UserProcess {
 	/**
 	 * Allocate a new process.
 	 */
-	
-	
+	private UserProcess parentProcess;
+	private LinkedList<UserProcess> childProcesses;
+	private int status;
+	private int exitStatus;
+	private int processID;
+	public static int processIDcounter = 0;
 	
 	public UserProcess() {
 		// Moved the pageTable initialization to the load() function.
 		
 		fileDescriptorTable[0] = stdin;// standard input
 		fileDescriptorTable[1] = stdout; // standard output
+		
+		this.parentProcess = null;
+		this.childProcesses = new LinkedList<UserProcess>();
+		this.status = 2; //Set it to the initial status of the process
+		this.exitStatus = 2; //Set it to the initial status of the process
+		this.processID = processIDcounter++;
 	}
 
 	/**
@@ -812,10 +822,41 @@ public class UserProcess {
 		for (int i = 2; i < numOpenFiles; i++) {
 			handleClose(i);
 		}
+
+		processIDcounter--;
+		
+		if (this.parentProcess != null) {
+			int childIndex = this.parentProcess.childProcesses.indexOf(this);
+			if (!(childIndex < 0)) {
+        		this.parentProcess.childProcesses.get(childIndex).exitStatus = a0;
+        		this.parentProcess.childProcesses.get(childIndex).status = 0;
+        	} 
+			else {
+        		// this should never occur;
+        		return -1;
+			}
+		}
 		
 		// Deallocate the physical memory mappings for this function
 		this.unloadSections();
-		return 0;
+		
+        // set the status of this processes' children
+        if (this.childProcesses != null) {
+        	if(!this.childProcesses.isEmpty()) {
+        		for (UserProcess child: this.childProcesses) {
+        			child.parentProcess = null;
+        		}
+        	}
+        }
+     		
+        if (this.processID == 0)
+            Machine.halt(); // root process calling halt
+        else if (processIDcounter == 0)
+            Kernel.kernel.terminate(); // last process calling terminate
+        else
+            UThread.finish();
+
+        return 0;
 	}
 	
 	private int handleExec(int a0, int a1, int a2) {
