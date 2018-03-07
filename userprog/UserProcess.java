@@ -27,8 +27,8 @@ public class UserProcess {
 	public UserProcess() {
 		// Moved the pageTable initialization to the load() function.
 		
-		fileDescriptorTable[0] = UserKernel.console.openForReading(); // standard input
-		fileDescriptorTable[1] = UserKernel.console.openForWriting(); // standard output
+		fileDescriptorTable[0] = stdin;// standard input
+		fileDescriptorTable[1] = stdout; // standard output
 	}
 
 	/**
@@ -567,41 +567,53 @@ public class UserProcess {
 			return -1;
 		}
 		
-		OpenFile file = ThreadedKernel.fileSystem.open(filename, create);
-		
-		if (file == null) {
-			System.out.println("File could not be opened for some reason.");
-			return -1;
-		}
-		
+		// Search for available file descriptor
 		for (int i = 0; i < 16; i++) {
+			
+			// If available file descriptor is found...
 			if (fileDescriptorTable[i] == null) {
-				
-				fileDescriptorTable[i] = file;
-
+		
+				// Search the global file open table to see if file is already open
 				Iterator<OpenFileTableEntry> it = openFileTable.iterator();
 				boolean fileAlreadyOpen = false;
 				OpenFileTableEntry curEntry = null;
 				
 				while (it.hasNext()) {
 					curEntry = it.next();
-					if (curEntry.getFileName().equals(filename)) {
+					if ( curEntry.getFileName().equals(filename) ) {
 						fileAlreadyOpen = true;
 						break;
-					}
+					}			
 				}
 				
+				// If file is already open, just increment file open count
 				if (fileAlreadyOpen) {
+					// If the file is marked for deletion, return with error immediately
+					if (curEntry.isMarkedForDeletion()) {
+						return -1;
+					}
 					curEntry.incrementOpenCount();
-				} 
-				else {
-					openFileTable.add(new OpenFileTableEntry(filename));
+					fileDescriptorTable[i] = curEntry;
 				}
-				
+				// Otherwise, create new entry in global file open table
+				else {
+					OpenFile newOpenedFile = ThreadedKernel.fileSystem.open(filename, create);
+					
+					if (newOpenedFile == null) {
+						System.out.println("File could not be opened for some reason.");
+						return -1;
+					}
+					
+					OpenFileTableEntry newEntry = new OpenFileTableEntry(newOpenedFile);
+					openFileTable.add(newEntry);
+					fileDescriptorTable[i] = newEntry;
+					
+				}
+				// Return the file descriptor for this file
 				return i;
 			}
 		}
-		file.close();
+		// If this point is reached, then there are no available file descriptors.  Return error.
 		System.out.println("No file descriptors available.");
 		return -1;		
 	}
@@ -624,7 +636,7 @@ public class UserProcess {
 			//System.out.println("File is not in the descriptor table");
 			return -1;
 		}else{
-			file = fileDescriptorTable[fileDescriptor];
+			file = fileDescriptorTable[fileDescriptor].getFileObject();
 		}
 
 		byte[] data_transf = new byte[count];
@@ -661,7 +673,7 @@ public class UserProcess {
 			//System.out.println("File is not in the descriptor table");
 			return -1;
 		}else{
-			file = fileDescriptorTable[fileDescriptor];
+			file = fileDescriptorTable[fileDescriptor].getFileObject();
 		}
 
 		byte[] data_dest = new byte[count];
@@ -681,42 +693,47 @@ public class UserProcess {
 	
 	/** closes 1 out of the possible 16 files that are used by a processor **/
 	private int handleClose(int fileIndx) {
-		if(fileIndx >= 0 && fileIndx <= 15) {
-			OpenFile file = fileDescriptorTable[fileIndx];
-			
-			if(file != null) {
-				
-				Iterator<OpenFileTableEntry> it = openFileTable.iterator();
-				OpenFileTableEntry curEntry = null;
-				boolean fileFound = false;
-				
-				while (it.hasNext()) {
-					curEntry = it.next();
-					if (curEntry.getFileName().equals(file.getName())) {
-						curEntry.decrementOpenCount();
-						fileFound = true;
-						break;
-					}
-				}
-				
-				if (!fileFound) {
-					System.out.println("Could not find file in open file table.");
-					return -1;
-				}
-				
-				file.close();
-				fileDescriptorTable[fileIndx] = null;
-				return 0;
-			} 
-			else {
-				System.out.println("Invalid file descriptor.");
-				return -1;
-			}
-		} 
-		else {
-			System.out.println("File descriptor out of range.");
+		if (fileIndx < 0 || fileIndx > 15) {
+			// file descriptor out of range
 			return -1;
 		}
+		
+		OpenFileTableEntry tableEntry = fileDescriptorTable[fileIndx];
+		
+		if (tableEntry == null) {
+			// invalid file descriptor
+			return -1;
+		}
+		
+		fileDescriptorTable[fileIndx] = null;
+		
+//		Lib.assertTrue(tableEntry.getOpenCount() > 0);
+		tableEntry.decrementOpenCount();
+
+		// If this is the last process to have the file open
+		if (tableEntry.getOpenCount() == 0) {
+			String filename = tableEntry.getFileName();
+			boolean isMarkedForDeletion = tableEntry.isMarkedForDeletion();
+			
+			// Close the Java file object
+			tableEntry.getFileObject().close();
+			
+			// Remove file from global open file table
+			openFileTable.remove(tableEntry);
+			
+			// If some process wanted to delete this file, delete it now
+			if (isMarkedForDeletion) {
+				if (ThreadedKernel.fileSystem.remove(filename)) {
+					return 0;
+				}
+				else {
+					return -1;
+				}
+			}
+		}
+		
+		return 0;
+
 	}
 	/** deletes a file as long as no one is using it. If file is in use,
 	 *  then deletion is prolonged, and other users who wish to use the file after
@@ -729,35 +746,62 @@ public class UserProcess {
 			System.out.println("Could not parse file name.");
 			return -1;
 		}
-
+		
+		// Search for file to be deleted in per-process file descriptor table, close
+		// all file descriptors referring to the file,  and mark file for deletion.
+		boolean fileInFDTable = false;
 		for(int i = 0; i < fileDescriptorTable.length; i++) {
 			if (fileDescriptorTable[i] != null) {
-				if (filename.equals(fileDescriptorTable[i].getName()))
+				OpenFileTableEntry curEntry = fileDescriptorTable[i];
+				if (filename.equals(curEntry.getFileName())) {
+					curEntry.markForDeletion();
 					handleClose(i);
+					fileInFDTable = true;
+					/*
+					 * There is no break statement here since a process can have multiple file
+					 * descriptors for the same file.
+					 * 
+					 * Also, there is no need to call StubFileSystem.remove() since handleClose()
+					 * will handle deleting the file if this is the last process to have the file
+					 * open.
+					 */
+				}
 			}
 		}
 		
-		if (ThreadedKernel.fileSystem.remove(filename)) {
-			return 0;
-		}
-		else {
+		// If file is not in per-process file descriptor table, search for file in
+		// global open file table.
+		if (!fileInFDTable) {
 			Iterator<OpenFileTableEntry> it = openFileTable.iterator();
+			boolean fileStillOpen = false;
 			OpenFileTableEntry curEntry = null;
-			boolean fileFound = false;
 			
 			while (it.hasNext()) {
 				curEntry = it.next();
-				if (curEntry.getFileName().equals(filename)) {
-					curEntry.markForDeletion();
-					fileFound = true;
+				if (filename.equals( curEntry.getFileName())) {
+					fileStillOpen = true;
 					break;
+				}			
+			}
+			
+			// If file is found in open file table, another process still has the file open.
+			// Do not attempt to delete, just mark file for deletion.
+			if(fileStillOpen) {
+				curEntry.markForDeletion();
+			}
+			// If file is not found in open file table, the file has already been closed.
+			// Simply delete the file immediately by name.
+			else {
+				if (ThreadedKernel.fileSystem.remove(filename)) {
+					return 0;
+				}
+				else {
+					return -1;
 				}
 			}
-			if(!fileFound) {
-				// kernel panic?
-			}
-			return -1;
 		}
+		
+		return 0;
 	}
 	
 	private int handleExit(int a0) {
@@ -776,10 +820,16 @@ public class UserProcess {
 	}
 
 	
+	
 	protected static class OpenFileTableEntry {
-		OpenFileTableEntry(String name) {
-			filename = name;
+		OpenFileTableEntry(OpenFile file) {
+			this.file = file;
 			fileOpenCount++;
+			filename = file.getName();
+		}
+		
+		public OpenFile getFileObject() {
+			return file;
 		}
 		
 		public String getFileName() {
@@ -794,10 +844,19 @@ public class UserProcess {
 			fileOpenCount--;
 		}
 		
+		public int getOpenCount() {
+			return fileOpenCount;
+		}
+		
 		public void markForDeletion() {
 			markedForDeletion = true;
 		}
 		
+		public boolean isMarkedForDeletion() {
+			return markedForDeletion;
+		}
+		
+		private OpenFile file;
 		private String filename;
 		private int fileOpenCount = 0;
 		private boolean markedForDeletion = false;
@@ -805,14 +864,14 @@ public class UserProcess {
 	
 	
 	
-	
-	
-	
 	// system wide open file table
 	protected static LinkedList<OpenFileTableEntry> openFileTable = new LinkedList<OpenFileTableEntry>();
 	
+	protected static OpenFileTableEntry stdin = new OpenFileTableEntry(UserKernel.console.openForReading()); // standard input
+	protected static OpenFileTableEntry stdout = new OpenFileTableEntry(UserKernel.console.openForWriting());
+	
 	/** Array of open file objects */
-	protected OpenFile[] fileDescriptorTable = new OpenFile[16];
+	protected OpenFileTableEntry[] fileDescriptorTable = new OpenFileTableEntry[16];
 	/** The program being run by this process. */
 	protected Coff coff;
 
