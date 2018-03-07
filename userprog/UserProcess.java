@@ -24,6 +24,8 @@ public class UserProcess {
 	 * Allocate a new process.
 	 */
 	
+	
+	
 	public UserProcess() {
 		// Moved the pageTable initialization to the load() function.
 		
@@ -805,7 +807,14 @@ public class UserProcess {
 	}
 	
 	private int handleExit(int a0) {
-		// TODO
+		// Close all open files
+		int numOpenFiles = fileDescriptorTable.length;
+		for (int i = 2; i < numOpenFiles; i++) {
+			handleClose(i);
+		}
+		
+		// Deallocate the physical memory mappings for this function
+		this.unloadSections();
 		return 0;
 	}
 	
@@ -861,6 +870,31 @@ public class UserProcess {
 		private int fileOpenCount = 0;
 		private boolean markedForDeletion = false;
 	} // end OpenFileTableEntry class
+	
+	
+	protected class ChildProcess{
+		public UserProcess process;
+		private Integer status; 
+		private Integer exitStatus;
+		
+		public ChildProcess(){
+			process = new UserProcess();
+			status = 0;
+			exitStatus = 0;
+		}
+		public void setStatus(int status) {
+			this.status = status;
+		}
+		public Integer getStatus(){
+			return this.status;
+		}
+		public void setExitStatus(int status) {
+			this.exitStatus = status;
+		}
+		public Integer getExitStatus(){
+			return this.exitStatus;
+		}
+	}
 	
 	
 	
